@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -32,17 +32,20 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { motion, AnimatePresence } from "framer-motion";
+import { createClient } from "@/utils/supabase/client";
 
 type Frequency = "daily" | "weekly" | "monthly";
 
 interface Income {
   amount: string;
   frequency: Frequency;
+  description: string;
 }
 
 interface Expense {
   amount: string;
   frequency: Frequency;
+  category: string;
   description: string;
 }
 
@@ -59,26 +62,65 @@ const convertToMonthly = (amount: string, frequency: Frequency): number => {
   }
 };
 
-const BudgetSetupWizard = () => {
+const BudgetSetupWizard: React.FC = () => {
   const [step, setStep] = useState(1);
   const [income, setIncome] = useState<Income>({
     amount: "",
     frequency: "monthly",
+    description: "",
   });
   const [expenses, setExpenses] = useState<Expense[]>([
-    { amount: "", frequency: "monthly", description: "" },
+    { amount: "", frequency: "monthly", category: "", description: "" },
   ]);
   const [remainingIncome, setRemainingIncome] = useState(0);
   const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042"];
 
+  const supabase = createClient();
+
+  useEffect(() => {
+    fetchUserData();
+  }, []);
+
+  const fetchUserData = async () => {
+    const { data: incomeData, error: incomeError } = await supabase
+      .from("income")
+      .select("*")
+      .single();
+
+    if (incomeData) {
+      setIncome({
+        amount: incomeData.amount.toString(),
+        frequency: incomeData.frequency as Frequency,
+        description: incomeData.description || "",
+      });
+    }
+
+    const { data: expensesData, error: expensesError } = await supabase
+      .from("expenses")
+      .select("*");
+
+    if (expensesData) {
+      setExpenses(
+        expensesData.map((expense) => ({
+          amount: expense.amount.toString(),
+          frequency: expense.frequency as Frequency,
+          category: expense.category || "",
+          description: expense.description || "",
+        })),
+      );
+    }
+
+    updateRemainingIncome(expensesData || []);
+  };
+
   const handleIncomeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setIncome({ ...income, amount: e.target.value });
-    updateRemainingIncome([...expenses]);
+    updateRemainingIncome(expenses);
   };
 
   const handleIncomeFrequencyChange = (value: Frequency) => {
     setIncome({ ...income, frequency: value });
-    updateRemainingIncome([...expenses]);
+    updateRemainingIncome(expenses);
   };
 
   const handleExpenseChange = (
@@ -96,7 +138,7 @@ const BudgetSetupWizard = () => {
   const addExpense = () => {
     setExpenses([
       ...expenses,
-      { amount: "", frequency: "monthly", description: "" },
+      { amount: "", frequency: "monthly", category: "", description: "" },
     ]);
   };
 
@@ -110,13 +152,95 @@ const BudgetSetupWizard = () => {
     setRemainingIncome(monthlyIncome - totalMonthlyExpenses);
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === 1 && income.amount) {
+      await saveIncome();
       setStep(2);
-    } else if (step === 2 && expenses.every((e) => e.amount && e.description)) {
+    } else if (step === 2 && expenses.every((e) => e.amount && e.category)) {
+      await saveExpenses();
       updateRemainingIncome(expenses);
+      await saveSavingsProjections();
       setStep(3);
     }
+  };
+
+  const saveIncome = async () => {
+    const { data, error } = await supabase.from("income").upsert({
+      amount: parseFloat(income.amount),
+      frequency: income.frequency,
+      description: income.description,
+    });
+
+    if (error) {
+      console.error("Error saving income:", error);
+    }
+  };
+
+  const saveExpenses = async () => {
+    const { data, error } = await supabase.from("expenses").upsert(
+      expenses.map((expense) => ({
+        amount: parseFloat(expense.amount),
+        frequency: expense.frequency,
+        category: expense.category,
+        description: expense.description,
+      })),
+    );
+
+    if (error) {
+      console.error("Error saving expenses:", error);
+    }
+  };
+
+  const saveSavingsProjections = async () => {
+    const projectedSavings = calculateProjectedSavings();
+    const { data, error } = await supabase.from("savings_projections").upsert(
+      projectedSavings.map((projection) => ({
+        month: new Date(projection.month).toISOString(),
+        projected_amount: projection.amount,
+      })),
+    );
+
+    if (error) {
+      console.error("Error saving savings projections:", error);
+    }
+  };
+
+  const calculateProjectedSavings = () => {
+    const monthlyIncome = convertToMonthly(income.amount, income.frequency);
+    const monthlyExpenses = expenses.reduce(
+      (total, expense) =>
+        total + convertToMonthly(expense.amount, expense.frequency),
+      0,
+    );
+    const monthlySavings = monthlyIncome - monthlyExpenses;
+
+    const currentDate = new Date();
+    const monthNames = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+
+    return Array.from({ length: 6 }, (_, i) => {
+      const projectedDate = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth() + i,
+        1,
+      );
+      return {
+        month: monthNames[projectedDate.getMonth()],
+        amount: monthlySavings * (i + 1),
+      };
+    });
   };
 
   const renderIncomeStep = () => (
@@ -198,6 +322,14 @@ const BudgetSetupWizard = () => {
                 </Select>
                 <Input
                   type="text"
+                  placeholder="Expense Category"
+                  value={expense.category}
+                  onChange={(e) =>
+                    handleExpenseChange(index, "category", e.target.value)
+                  }
+                />
+                <Input
+                  type="text"
                   placeholder="Expense Description"
                   value={expense.description}
                   onChange={(e) =>
@@ -208,7 +340,6 @@ const BudgetSetupWizard = () => {
             ))}
             <Button onClick={addExpense}>Add Expense</Button>
             <div>Remaining Income: ${remainingIncome.toFixed(2)}</div>
-            <div>Monthly Remaining Income: ${remainingIncome.toFixed(2)}</div>
             <Button onClick={handleNext}>Next</Button>
           </div>
         </CardContent>
@@ -216,71 +347,26 @@ const BudgetSetupWizard = () => {
     </motion.div>
   );
 
-  const calculateProjectedSavings = () => {
-    const monthlyIncome = convertToMonthly(income.amount, income.frequency);
-    const monthlyExpenses = expenses.reduce(
-      (total, expense) =>
-        total + convertToMonthly(expense.amount, expense.frequency),
-      0,
-    );
-    const monthlySavings = monthlyIncome - monthlyExpenses;
-
-    const currentDate = new Date();
-    const monthNames = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-
-    return Array.from({ length: 6 }, (_, i) => {
-      const projectedDate = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth() + i,
-        1,
-      );
-      return {
-        month: monthNames[projectedDate.getMonth()],
-        amount: monthlySavings * (i + 1),
-      };
-    });
-  };
-
-  const calculateExpensesByCategory = () => {
-    return expenses.map((expense) => ({
-      name: expense.description,
-      value: convertToMonthly(expense.amount, expense.frequency),
-    }));
-  };
-
   const renderChartsStep = () => {
     const projectedSavings = calculateProjectedSavings();
-    const expensesByCategory = calculateExpensesByCategory();
-
-    const savingsChartConfig = {
-      amount: {
-        label: "Projected Savings",
-        color: "#2563eb",
+    const expensesByCategory = expenses.reduce(
+      (acc, expense) => {
+        const monthlyAmount = convertToMonthly(
+          expense.amount,
+          expense.frequency,
+        );
+        acc[expense.category] = (acc[expense.category] || 0) + monthlyAmount;
+        return acc;
       },
-    } satisfies ChartConfig;
+      {} as Record<string, number>,
+    );
 
-    const expensesChartConfig = expensesByCategory.reduce(
-      (config, category) => {
-        config[category.name] = {
-          label: category.name,
-          color: COLORS[Object.keys(config).length % COLORS.length],
-        };
-        return config;
-      },
-      {} as ChartConfig,
+    const pieChartData = Object.entries(expensesByCategory).map(
+      ([name, value], index) => ({
+        name,
+        value,
+        fill: COLORS[index % COLORS.length],
+      }),
     );
 
     return (
@@ -295,60 +381,42 @@ const BudgetSetupWizard = () => {
               <CardTitle>Projected Savings</CardTitle>
             </CardHeader>
             <CardContent>
-              <ChartContainer
-                config={savingsChartConfig}
-                className="min-h-[200px] w-full"
-              >
-                <ResponsiveContainer>
-                  <BarChart data={projectedSavings}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                    <Bar
-                      dataKey="amount"
-                      fill="var(--color-amount)"
-                      radius={4}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartContainer>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={projectedSavings}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <Bar dataKey="amount" fill="#8884d8" />
+                  <ChartTooltip />
+                </BarChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Monthly Expenses</CardTitle>
+              <CardTitle>Monthly Expenses by Category</CardTitle>
             </CardHeader>
             <CardContent>
-              <ChartContainer
-                config={expensesChartConfig}
-                className="min-h-[200px] w-full"
-              >
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie
-                      data={expensesByCategory}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={80}
-                      fill="#8884d8"
-                      label
-                    >
-                      {expensesByCategory.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={COLORS[index % COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <ChartTooltip content={<ChartTooltipContent />} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </ChartContainer>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={pieChartData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    fill="#8884d8"
+                    label
+                  >
+                    {pieChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <ChartTooltip />
+                  <ChartLegend />
+                </PieChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
         </div>
