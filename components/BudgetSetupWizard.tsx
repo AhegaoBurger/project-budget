@@ -34,6 +34,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { createClient } from "@/utils/supabase/client";
 import { type User } from "@supabase/supabase-js";
+import { X } from "lucide-react";
 
 interface BudgetSetupWizardProps {
   user: User | null;
@@ -152,6 +153,25 @@ const BudgetSetupWizard: React.FC<BudgetSetupWizardProps> = ({
     fetchUserData();
   }, [fetchUserData]);
 
+  const removeExpense = async (index: number) => {
+    const expenseToRemove = expenses[index];
+    const updatedExpenses = expenses.filter((_, i) => i !== index);
+    setExpenses(updatedExpenses);
+    updateRemainingIncome(updatedExpenses);
+
+    // If the expense was from the database, delete it
+    if (expenseToRemove.id) {
+      const { error } = await supabase
+        .from("expenses")
+        .delete()
+        .eq("id", expenseToRemove.id);
+
+      if (error) {
+        console.error("Error deleting expense:", error);
+      }
+    }
+  };
+
   const handleIncomeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setIncome({ ...income, amount: e.target.value });
     updateRemainingIncome(expenses);
@@ -199,7 +219,8 @@ const BudgetSetupWizard: React.FC<BudgetSetupWizardProps> = ({
       await saveExpenses();
       updateRemainingIncome(expenses);
       await saveSavingsProjections();
-      setStep(3);
+      // Instead of setting step to 3, we'll redirect to the budget page
+      window.location.href = "/budget";
     }
   };
 
@@ -367,6 +388,14 @@ const BudgetSetupWizard: React.FC<BudgetSetupWizardProps> = ({
                     handleExpenseChange(index, "description", e.target.value)
                   }
                 />
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  className="absolute top-0 right-0"
+                  onClick={() => removeExpense(index)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
             ))}
             <Button onClick={addExpense}>Add Expense</Button>
@@ -483,7 +512,6 @@ const BudgetSetupWizard: React.FC<BudgetSetupWizardProps> = ({
       <AnimatePresence mode="wait">
         {step === 1 && renderIncomeStep()}
         {step === 2 && renderExpensesStep()}
-        {step === 3 && renderChartsStep()}
       </AnimatePresence>
     </div>
   );
