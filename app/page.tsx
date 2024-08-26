@@ -1,21 +1,19 @@
 import { createClient } from "@/utils/supabase/server";
-import { cookies } from "next/headers";
 import BudgetSetupWizard from "@/components/BudgetSetupWizard";
 import LandingPage from "@/components/LandingPage";
 
 export default async function Home() {
-  const cookieStore = cookies();
-  const supabase = createClient(cookieStore);
+  const supabase = createClient();
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
   return (
     <main className="container mx-auto p-4">
       <h1 className="text-3xl font-bold mb-4">
         Welcome to Your Budget Planner
       </h1>
-      {session ? <BudgetSetupWizard /> : <LandingPage />}
+      {user ? <BudgetSetupWizard user={user} /> : <LandingPage />}
     </main>
   );
 }

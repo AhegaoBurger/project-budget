@@ -4,8 +4,7 @@ import BudgetSetupWizard from "@/components/BudgetSetupWizard";
 import { redirect } from "next/navigation";
 
 export default async function BudgetPage() {
-  const cookieStore = cookies();
-  const supabase = createClient(cookieStore);
+  const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -19,7 +18,7 @@ export default async function BudgetPage() {
       <h1 className="text-3xl font-bold mb-4">
         Welcome to Your Budget Planner, {user.email}
       </h1>
-      <BudgetSetupWizard />
+      <BudgetSetupWizard user={user} />
     </main>
   );
 }

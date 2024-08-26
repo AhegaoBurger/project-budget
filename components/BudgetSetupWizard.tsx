@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -33,6 +33,11 @@ import {
 } from "@/components/ui/chart";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClient } from "@/utils/supabase/client";
+import { type User } from "@supabase/supabase-js";
+
+interface BudgetSetupWizardProps {
+  user: User | null;
+}
 
 type Frequency = "daily" | "weekly" | "monthly";
 
@@ -62,7 +67,12 @@ const convertToMonthly = (amount: string, frequency: Frequency): number => {
   }
 };
 
-const BudgetSetupWizard: React.FC = () => {
+const BudgetSetupWizard: React.FC<BudgetSetupWizardProps> = ({
+  user,
+}: {
+  user: User | null;
+}) => {
+  const supabase = createClient();
   const [step, setStep] = useState(1);
   const [income, setIncome] = useState<Income>({
     amount: "",
@@ -73,45 +83,74 @@ const BudgetSetupWizard: React.FC = () => {
     { amount: "", frequency: "monthly", category: "", description: "" },
   ]);
   const [remainingIncome, setRemainingIncome] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+
   const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042"];
 
-  const supabase = createClient();
+  const fetchUserData = useCallback(async () => {
+    if (!user) {
+      console.log("No user found, skipping data fetch");
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    console.log("Fetching user data for user ID:", user.id);
+
+    try {
+      // Fetch income data
+      const { data: incomeData, error: incomeError } = await supabase
+        .from("income")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+
+      if (incomeError) {
+        console.error("Error fetching income:", incomeError);
+      } else if (incomeData) {
+        console.log("Income data fetched:", incomeData);
+        setIncome({
+          amount: incomeData.amount.toString(),
+          frequency: incomeData.frequency as Frequency,
+          description: incomeData.description || "",
+        });
+      } else {
+        console.log("No income data found for user");
+      }
+
+      // Fetch expenses data
+      const { data: expensesData, error: expensesError } = await supabase
+        .from("expenses")
+        .select("*")
+        .eq("user_id", user.id);
+
+      if (expensesError) {
+        console.error("Error fetching expenses:", expensesError);
+      } else if (expensesData && expensesData.length > 0) {
+        console.log("Expenses data fetched:", expensesData);
+        setExpenses(
+          expensesData.map((expense) => ({
+            amount: expense.amount.toString(),
+            frequency: expense.frequency as Frequency,
+            category: expense.category || "",
+            description: expense.description || "",
+          })),
+        );
+        updateRemainingIncome(expensesData);
+      } else {
+        console.log("No expenses data found for user");
+      }
+    } catch (error) {
+      console.error("Error in fetchUserData:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, supabase]);
 
   useEffect(() => {
+    console.log("useEffect triggered, user:", user?.id);
     fetchUserData();
-  }, []);
-
-  const fetchUserData = async () => {
-    const { data: incomeData, error: incomeError } = await supabase
-      .from("income")
-      .select("*")
-      .single();
-
-    if (incomeData) {
-      setIncome({
-        amount: incomeData.amount.toString(),
-        frequency: incomeData.frequency as Frequency,
-        description: incomeData.description || "",
-      });
-    }
-
-    const { data: expensesData, error: expensesError } = await supabase
-      .from("expenses")
-      .select("*");
-
-    if (expensesData) {
-      setExpenses(
-        expensesData.map((expense) => ({
-          amount: expense.amount.toString(),
-          frequency: expense.frequency as Frequency,
-          category: expense.category || "",
-          description: expense.description || "",
-        })),
-      );
-    }
-
-    updateRemainingIncome(expensesData || []);
-  };
+  }, [fetchUserData]);
 
   const handleIncomeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setIncome({ ...income, amount: e.target.value });
@@ -165,7 +204,9 @@ const BudgetSetupWizard: React.FC = () => {
   };
 
   const saveIncome = async () => {
+    if (!user) return;
     const { data, error } = await supabase.from("income").upsert({
+      user_id: user.id,
       amount: parseFloat(income.amount),
       frequency: income.frequency,
       description: income.description,
@@ -177,8 +218,10 @@ const BudgetSetupWizard: React.FC = () => {
   };
 
   const saveExpenses = async () => {
+    if (!user) return;
     const { data, error } = await supabase.from("expenses").upsert(
       expenses.map((expense) => ({
+        user_id: user.id,
         amount: parseFloat(expense.amount),
         frequency: expense.frequency,
         category: expense.category,
@@ -188,20 +231,6 @@ const BudgetSetupWizard: React.FC = () => {
 
     if (error) {
       console.error("Error saving expenses:", error);
-    }
-  };
-
-  const saveSavingsProjections = async () => {
-    const projectedSavings = calculateProjectedSavings();
-    const { data, error } = await supabase.from("savings_projections").upsert(
-      projectedSavings.map((projection) => ({
-        month: new Date(projection.month).toISOString(),
-        projected_amount: projection.amount,
-      })),
-    );
-
-    if (error) {
-      console.error("Error saving savings projections:", error);
     }
   };
 
@@ -215,20 +244,6 @@ const BudgetSetupWizard: React.FC = () => {
     const monthlySavings = monthlyIncome - monthlyExpenses;
 
     const currentDate = new Date();
-    const monthNames = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
 
     return Array.from({ length: 6 }, (_, i) => {
       const projectedDate = new Date(
@@ -237,10 +252,26 @@ const BudgetSetupWizard: React.FC = () => {
         1,
       );
       return {
-        month: monthNames[projectedDate.getMonth()],
+        month: projectedDate.toISOString().slice(0, 7), // Format: "YYYY-MM"
         amount: monthlySavings * (i + 1),
       };
     });
+  };
+
+  const saveSavingsProjections = async () => {
+    if (!user) return;
+    const projectedSavings = calculateProjectedSavings();
+    const { data, error } = await supabase.from("savings_projections").upsert(
+      projectedSavings.map((projection) => ({
+        user_id: user.id,
+        month: projection.month,
+        projected_amount: projection.amount,
+      })),
+    );
+
+    if (error) {
+      console.error("Error saving savings projections:", error);
+    }
   };
 
   const renderIncomeStep = () => (
@@ -349,6 +380,25 @@ const BudgetSetupWizard: React.FC = () => {
 
   const renderChartsStep = () => {
     const projectedSavings = calculateProjectedSavings();
+    const monthNames = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+
+    const chartData = projectedSavings.map((saving) => ({
+      month: monthNames[new Date(saving.month).getMonth()],
+      amount: saving.amount,
+    }));
     const expensesByCategory = expenses.reduce(
       (acc, expense) => {
         const monthlyAmount = convertToMonthly(
@@ -382,7 +432,7 @@ const BudgetSetupWizard: React.FC = () => {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={projectedSavings}>
+                <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" />
                   <Bar dataKey="amount" fill="#8884d8" />
@@ -423,6 +473,10 @@ const BudgetSetupWizard: React.FC = () => {
       </motion.div>
     );
   };
+
+  if (isLoading) {
+    return <div>Loading user data...</div>;
+  }
 
   return (
     <div className="container mx-auto p-4">
